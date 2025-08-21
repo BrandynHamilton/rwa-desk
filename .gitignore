@@ -1,0 +1,7 @@
+*.env
+*.venv
+**notes.txt
+*.pyc
+**/__pycache__/
+**/node_modules/
+*.mp4
