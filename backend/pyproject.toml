@@ -1,0 +1,10 @@
+[project]
+name = "rwa-desk"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.116.1",
+    "python-dotenv>=1.1.1",
+    "uvicorn>=0.35.0",
+    "web3>=7.13.0",
+]
