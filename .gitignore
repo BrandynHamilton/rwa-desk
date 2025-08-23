@@ -5,3 +5,6 @@
 **/__pycache__/
 **/node_modules/
 *.mp4
+/EncryptedERC
+/eerc-backend-converter
+/frontend
