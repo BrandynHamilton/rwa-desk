@@ -2,29 +2,34 @@
 pragma solidity ^0.8.27;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 interface IERC721Receiver {
-    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data)
-        external
-        returns (bytes4);
+    function onERC721Received(
+        address operator,
+        address from,
+        uint256 tokenId,
+        bytes calldata data
+    ) external returns (bytes4);
 }
 
-/// @title RWAEscrow: Real-World Asset Escrow Contract
-/// @author 
+/// @title RWADesk: Real-World Asset OTC Desk Contract
+/// @author Brandyn Hamilton (RWA Desk Team)
 /// @notice Allows sellers to escrow ERC20 or ERC721 assets, accept USDC bids, and close escrows to release
 /// the asset to the winning bidder while managing refunds for losing bidders.
 /// @dev Uses OpenZeppelin Ownable for access control and ReentrancyGuard for safe fund transfers.
 
-contract RWAEscrow is Ownable, ReentrancyGuard {
+contract RWADesk is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Type of asset being escrowed
-    enum AssetType { ERC20, ERC721 }
-
+    enum AssetType {
+        ERC20,
+        ERC721
+    }
 
     /// @notice Represents an individual escrow
     /// @param valuation The minimum accepted bid in USDC (6 decimals)
@@ -39,24 +44,23 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param assetDeposited True if the asset is currently held in escrow
     /// @param bidOf Mapping from bidder address to current bid amount
     struct Escrow {
-        uint256 valuation;           // USDC (6 decimals) or whatever unit you choose
-        address seller;              // receives winning funds
-        address[] bidders;           // iteration set
+        uint256 valuation; // USDC (6 decimals) or whatever unit you choose
+        address seller; // receives winning funds
+        address[] bidders; // iteration set
         bool isActive;
         bool isCompleted;
         address winner;
-
         // RWA custody
         AssetType assetType;
-        address assetAddress;        // ERC20 or ERC721 contract
-        uint256 amountOrId;          // amount (ERC20) or tokenId (ERC721)
+        address assetAddress; // ERC20 or ERC721 contract
+        uint256 amountOrId; // amount (ERC20) or tokenId (ERC721)
         bool assetDeposited;
-
         // Bids
         mapping(address => uint256) bidOf; // bidder => funded bid (in USDC)
     }
 
     mapping(bytes32 => Escrow) private escrows;
+    bytes32[] public escrowIds;
     uint256 public escrowCount;
 
     IERC20 public usdc;
@@ -68,7 +72,13 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param assetType Type of asset (ERC20/ERC721)
     /// @param asset Asset contract address
     /// @param amountOrId Amount or tokenId deposited
-    event EscrowInitialized(bytes32 indexed escrowId, address indexed seller, AssetType assetType, address asset, uint256 amountOrId);
+    event EscrowInitialized(
+        bytes32 indexed escrowId,
+        address indexed seller,
+        AssetType assetType,
+        address asset,
+        uint256 amountOrId
+    );
 
     /// @notice Emitted when valuation is posted for an escrow
     /// @param escrowId Escrow identifier
@@ -80,13 +90,22 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param bidder Address of the bidder
     /// @param newAmount Current bid amount
     /// @param deltaIn Amount newly transferred to contract
-    event BidPlaced(bytes32 indexed escrowId, address indexed bidder, uint256 newAmount, uint256 deltaIn);
+    event BidPlaced(
+        bytes32 indexed escrowId,
+        address indexed bidder,
+        uint256 newAmount,
+        uint256 deltaIn
+    );
 
     /// @notice Emitted when escrow is successfully closed
     /// @param escrowId Escrow identifier
     /// @param winner Address of winning bidder
     /// @param winningBid Winning bid amount in USDC
-    event EscrowClosed(bytes32 indexed escrowId, address indexed winner, uint256 winningBid);
+    event EscrowClosed(
+        bytes32 indexed escrowId,
+        address indexed winner,
+        uint256 winningBid
+    );
 
     /// @notice Emitted when escrow is canceled
     /// @param escrowId Escrow identifier
@@ -108,12 +127,16 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param asset ERC20 token address
     /// @param amount Number of tokens to deposit
     /// @return escrowId Unique identifier for the escrow
-    function initEscrowERC20(address asset, uint256 amount) external returns (bytes32 escrowId) {
+    function initEscrowERC20(
+        address asset,
+        uint256 amount
+    ) external returns (bytes32 escrowId) {
         require(asset != address(0), "asset=0");
         require(amount > 0, "amount=0");
         IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
 
         escrowId = _newEscrowId();
+        escrowIds.push(escrowId);
         Escrow storage e = escrows[escrowId];
 
         e.seller = msg.sender;
@@ -123,7 +146,13 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
         e.amountOrId = amount;
         e.assetDeposited = true;
 
-        emit EscrowInitialized(escrowId, msg.sender, AssetType.ERC20, asset, amount);
+        emit EscrowInitialized(
+            escrowId,
+            msg.sender,
+            AssetType.ERC20,
+            asset,
+            amount
+        );
 
         return escrowId;
     }
@@ -133,11 +162,15 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param asset ERC721 token address
     /// @param tokenId Token ID to deposit
     /// @return escrowId Unique identifier for the escrow
-    function initEscrowERC721(address asset, uint256 tokenId) external nonReentrant returns (bytes32 escrowId) {
+    function initEscrowERC721(
+        address asset,
+        uint256 tokenId
+    ) external nonReentrant returns (bytes32 escrowId) {
         require(asset != address(0), "asset=0");
         IERC721(asset).safeTransferFrom(msg.sender, address(this), tokenId); // will call onERC721Received
 
         escrowId = _newEscrowId();
+        escrowIds.push(escrowId);
         Escrow storage e = escrows[escrowId];
 
         e.seller = msg.sender;
@@ -147,14 +180,25 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
         e.amountOrId = tokenId;
         e.assetDeposited = true;
 
-        emit EscrowInitialized(escrowId, msg.sender, AssetType.ERC721, asset, tokenId);
+        emit EscrowInitialized(
+            escrowId,
+            msg.sender,
+            AssetType.ERC721,
+            asset,
+            tokenId
+        );
 
         return escrowId;
     }
 
     /// @notice Required callback to receive ERC721 tokens via safeTransferFrom
     /// @return selector IERC721Receiver.onERC721Received.selector
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+    function onERC721Received(
+        address,
+        address,
+        uint256,
+        bytes calldata
+    ) external pure returns (bytes4) {
         return IERC721Receiver.onERC721Received.selector;
     }
 
@@ -162,7 +206,10 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @dev Only callable by the contract owner (desk)
     /// @param escrowId Escrow identifier
     /// @param valuation Minimum bid amount in USDC
-    function postValuation(bytes32 escrowId, uint256 valuation) external onlyOwner {
+    function postValuation(
+        bytes32 escrowId,
+        uint256 valuation
+    ) external onlyOwner {
         Escrow storage e = escrows[escrowId];
         require(e.isActive, "Inactive escrow");
         require(e.valuation == 0, "Valuation set");
@@ -214,7 +261,10 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
         for (uint256 i = 0; i < len; i++) {
             address b = e.bidders[i];
             uint256 amt = e.bidOf[b];
-            if (amt > highest) { highest = amt; winner_ = b; }
+            if (amt > highest) {
+                highest = amt;
+                winner_ = b;
+            }
         }
         require(highest > 0, "No bids");
 
@@ -284,16 +334,34 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @return assetType ERC20/ERC721
     /// @return assetAddress Address of the asset
     /// @return amountOrId Amount (ERC20) or tokenId (ERC721)
-    function getEscrowMeta(bytes32 escrowId)
+    function getEscrowMeta(
+        bytes32 escrowId
+    )
         external
         view
-        returns (uint256 valuation, address seller, bool isActive, bool isCompleted, address winner, uint256 bidderCount,
-                 AssetType assetType, address assetAddress, uint256 amountOrId)
+        returns (
+            uint256 valuation,
+            address seller,
+            bool isActive,
+            bool isCompleted,
+            address winner,
+            uint256 bidderCount,
+            AssetType assetType,
+            address assetAddress,
+            uint256 amountOrId
+        )
     {
         Escrow storage e = escrows[escrowId];
         return (
-            e.valuation, e.seller, e.isActive, e.isCompleted, e.winner, e.bidders.length,
-            e.assetType, e.assetAddress, e.amountOrId
+            e.valuation,
+            e.seller,
+            e.isActive,
+            e.isCompleted,
+            e.winner,
+            e.bidders.length,
+            e.assetType,
+            e.assetAddress,
+            e.amountOrId
         );
     }
 
@@ -301,14 +369,19 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
     /// @param escrowId Escrow identifier
     /// @param bidder Bidder address
     /// @return Current bid amount
-    function bidOf(bytes32 escrowId, address bidder) external view returns (uint256) {
+    function bidOf(
+        bytes32 escrowId,
+        address bidder
+    ) external view returns (uint256) {
         return escrows[escrowId].bidOf[bidder];
     }
 
     /// @notice Generates a new unique escrow identifier
     /// @dev Internal function
     function _newEscrowId() internal returns (bytes32 id) {
-        unchecked { escrowCount++; }
+        unchecked {
+            escrowCount++;
+        }
         id = keccak256(abi.encodePacked(escrowCount));
     }
 
@@ -328,8 +401,11 @@ contract RWAEscrow is Ownable, ReentrancyGuard {
         IERC20(token).safeTransfer(to, amount);
     }
 
-    function _releaseERC721(address token, address to, uint256 tokenId) internal {
+    function _releaseERC721(
+        address token,
+        address to,
+        uint256 tokenId
+    ) internal {
         IERC721(token).safeTransferFrom(address(this), to, tokenId);
     }
-
 }
